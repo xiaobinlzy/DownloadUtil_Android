@@ -3,24 +3,25 @@ package com.dll.downloadutil.download;
 import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.OutputStreamWriter;
+import java.io.Serializable;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
 import java.net.URL;
 import java.util.UUID;
 
-import org.json.JSONException;
-import org.json.JSONObject;
-
 import android.content.Context;
-import android.util.Log;
 
 public class DownloadTask implements Runnable {
-    protected static final String FOLDER_PATH = "/downloadutil/";
+    protected static final String DEFAULT_FOLDER_PATH = "/downloadutil/";
     protected static final int DEFAULT_TIMEOUT_INTERVAL = 20000;
     protected static final int DEFAULT_MEMORY_CACHE_SIZE = 100;
 
@@ -113,7 +114,8 @@ public class DownloadTask implements Runnable {
      */
     public String getFilePath() {
 	if (mFilePath == null) {
-	    setFilePath(FilePathUtil.makeFilePath(mContext, FOLDER_PATH, getFileName()));
+	    setFilePath(FilePathUtil.makeFilePath(mContext, DEFAULT_FOLDER_PATH,
+		    getFileName()));
 	}
 	return mFilePath;
     }
@@ -253,13 +255,14 @@ public class DownloadTask implements Runnable {
 	return mTargetURL;
     }
 
-    protected void guessFileName() {
+    private void guessFileName() {
 	if (mFileName != null) {
 	    return;
 	}
 	int lastIndexOfPathComponent = mTargetURL.lastIndexOf("/");
 	String last = mTargetURL
-		.substring(lastIndexOfPathComponent >= 0 ? lastIndexOfPathComponent + 1 : 0);
+		.substring(lastIndexOfPathComponent >= 0 ? lastIndexOfPathComponent + 1
+			: 0);
 	int loc = last.indexOf("?");
 	if (loc >= 0) {
 	    last = last.substring(0, loc);
@@ -308,9 +311,8 @@ public class DownloadTask implements Runnable {
 	    SocketAddress address = new InetSocketAddress(host, port);
 	    mSocket.connect(address, getTimeoutInterval());
 
-	    Log.i(TAG, "socket receive buffer size is: " + mSocket.getReceiveBufferSize());
-	    bufferedWriter = new BufferedWriter(new OutputStreamWriter(mSocket.getOutputStream(),
-		    "UTF8"));
+	    bufferedWriter = new BufferedWriter(new OutputStreamWriter(
+		    mSocket.getOutputStream(), "UTF8"));
 	    String requestStr = "GET " + url.getFile() + " HTTP/1.1\r\n";
 
 	    String hostHeader = "Host: " + host + "\r\n";
@@ -329,7 +331,8 @@ public class DownloadTask implements Runnable {
 		bufferedWriter.write("Range: bytes=" + mLoadedByteLength + "-\r\n");
 	    } else {
 		guessFileName();
-		String folderPath = getFilePath().substring(0, getFilePath().lastIndexOf("/"));
+		String folderPath = getFilePath().substring(0,
+			getFilePath().lastIndexOf("/"));
 		File folder = new File(folderPath);
 		if (!folder.exists() || !folder.isDirectory()) {
 		    folder.mkdirs();
@@ -341,7 +344,6 @@ public class DownloadTask implements Runnable {
 	    bufferedWriter.write("\r\n");
 	    bufferedWriter.flush();
 	    inputStream = mSocket.getInputStream();
-	    Log.i(TAG, inputStream.getClass().getName());
 	    HttpResponseHeaderParser responseHeader = new HttpResponseHeaderParser();
 	    String responseHeaderLine = null;
 	    char readChar = 0;
@@ -349,17 +351,16 @@ public class DownloadTask implements Runnable {
 	    while ((byte) (readChar = (char) inputStream.read()) != -1) {
 		headerBuilder.append(readChar);
 		if (readChar == 10) {
-		    responseHeaderLine = headerBuilder.substring(0, headerBuilder.length() - 2);
+		    responseHeaderLine = headerBuilder.substring(0,
+			    headerBuilder.length() - 2);
 		    headerBuilder.setLength(0);
 		    if (responseHeaderLine.length() == 0) {
 			break;
 		    } else {
 			responseHeader.addResponseHeaderLine(responseHeaderLine);
-			Log.i(TAG, responseHeaderLine);
 		    }
 		}
 	    }
-	    Log.i(TAG, "status code: " + responseHeader.getStatusCode());
 
 	    if (mTotalByteLength == 0) {
 		mTotalByteLength = responseHeader.getContentLength();
@@ -372,14 +373,12 @@ public class DownloadTask implements Runnable {
 	    mDeltaLByteLength = 0;
 	    mSleepTime = 0;
 	    while ((length = inputStream.read(buffer)) != -1 && mIsDownloading) {
-		Log.i(TAG, "receive data: " + length + " available: " + inputStream.available());
 		mByteOutput.write(buffer, 0, length);
 		if (mByteOutput.size() >= getMemoryCacheSize() << 10) {
 		    writeCache();
 		}
 		limitTheByteRate(length);
 	    }
-	    Log.i(TAG, "receive data: " + length + " available: " + inputStream.available());
 
 	} catch (Exception e) {
 	    mException = e;
@@ -403,7 +402,6 @@ public class DownloadTask implements Runnable {
 	    } catch (IOException e) {
 		e.printStackTrace();
 	    }
-	    stop();
 	    writeCache();
 	    try {
 		if (mOutputStream != null) {
@@ -421,6 +419,16 @@ public class DownloadTask implements Runnable {
 	    } catch (IOException e) {
 		e.printStackTrace();
 	    }
+
+	    if (mLoadedByteLength >= mTotalByteLength) {
+		mTargetFile.renameTo(new File(getFilePath()));
+		new File(getConfigFilePath()).delete();
+		if (mException == null && mDownloadManager != null) {
+		    mDownloadManager.onFinishDownload(this);
+		}
+		return;
+	    }
+	    stop();
 	}
     }
 
@@ -433,7 +441,6 @@ public class DownloadTask implements Runnable {
 	mDeltaLByteLength += receiveByteLength;
 	if (passedTime > 0) {
 	    int byteRate = (int) (mDeltaLByteLength * 1000 / passedTime);
-	    Log.i(TAG, "current rate is " + byteRate + " bps");
 	    if (passedTime >= 5000) {
 		mTimeStart = currentTime;
 		mDeltaLByteLength = 0;
@@ -453,7 +460,7 @@ public class DownloadTask implements Runnable {
 	}
     }
 
-    protected synchronized void writeCache() {
+    private void writeCache() {
 	if (!mTargetFile.exists()) {
 	    try {
 		mTargetFile.createNewFile();
@@ -470,16 +477,29 @@ public class DownloadTask implements Runnable {
 		e.printStackTrace();
 	    }
 	}
-
-	if (mLoadedByteLength >= mTotalByteLength) {
-	    mTargetFile.renameTo(new File(getFilePath()));
-	    if (mException == null && mDownloadManager != null) {
-		mDownloadManager.onFinishDownload(this);
-	    }
-	    return;
-	}
+	writeConfigFile();
 	if (mDownloadManager != null) {
 	    mDownloadManager.onReceiveDownloadData(this);
+	}
+    }
+
+    public synchronized void writeConfigFile() {
+	ObjectOutputStream out = null;
+	try {
+	    out = new ObjectOutputStream(new FileOutputStream(getConfigFilePath()));
+	    out.writeObject(getConfig());
+	} catch (FileNotFoundException e) {
+	    e.printStackTrace();
+	} catch (IOException e) {
+	    e.printStackTrace();
+	} finally {
+	    if (out != null) {
+		try {
+		    out.close();
+		} catch (IOException e) {
+		    e.printStackTrace();
+		}
+	    }
 	}
     }
 
@@ -494,7 +514,8 @@ public class DownloadTask implements Runnable {
      * 开始这个下载任务
      */
     public synchronized void start() {
-	if (mIsDownloading || (mLoadedByteLength >= mTotalByteLength && mTotalByteLength != 0)) {
+	if (mIsDownloading
+		|| (mLoadedByteLength >= mTotalByteLength && mTotalByteLength != 0)) {
 	    return;
 	}
 	mIsDownloading = true;
@@ -503,7 +524,7 @@ public class DownloadTask implements Runnable {
 	thread.start();
     }
 
-    protected void setDownloadManager(DownloadManager manager) {
+    public void setDownloadManager(DownloadManager manager) {
 	this.mDownloadManager = manager;
     }
 
@@ -521,23 +542,32 @@ public class DownloadTask implements Runnable {
      * 
      * @return
      */
-    public JSONObject getJsonObject() {
-	JSONObject jsonObj = new JSONObject();
+    private DownloadConfig getConfig() {
+	DownloadConfig cfg = new DownloadConfig();
+	cfg.uuid = getUUID();
+	cfg.targetURL = getTargetURL();
+	cfg.loadedByteLength = getLoadedByteLength();
+	cfg.totalByteLength = getTotalByteLength();
+	cfg.downloadRateLimit = getDownloadRateLimit();
+	cfg.memoryCacheSize = getMemoryCacheSize();
+	cfg.tag = getTag();
+	cfg.filePath = getFilePath();
+	cfg.fileName = getFileName();
+	return cfg;
+    }
+
+    public static DownloadTask createTaskFromConfigFile(Context context, String configFile) {
+	File config = new File(configFile);
 	try {
-	    jsonObj.put("uuid", getUUID());
-	    jsonObj.put("targetURL", getTargetURL());
-	    jsonObj.put("loadedByteLength", getLoadedByteLength());
-	    jsonObj.put("totalByteLength", getTotalByteLength());
-	    jsonObj.put("downloadRateLimit", getDownloadRateLimit());
-	    jsonObj.put("memoryCacheSize", getMemoryCacheSize());
-	    jsonObj.put("tag", getTag());
-	    jsonObj.put("filePath", getFilePath());
-	    jsonObj.put("fileName", getFileName());
-	} catch (JSONException e) {
+	    return new DownloadTask(context, config);
+	} catch (Exception e) {
 	    e.printStackTrace();
-	    return null;
 	}
-	return jsonObj;
+	return null;
+    }
+
+    private DownloadTask(Context context) {
+	mContext = context.getApplicationContext();
     }
 
     /**
@@ -546,17 +576,39 @@ public class DownloadTask implements Runnable {
      * @param context
      * @param jsonObject
      */
-    public DownloadTask(Context context, JSONObject jsonObject) {
-	mContext = context.getApplicationContext();
-	mUUID = jsonObject.optString("uuid");
-	mTargetURL = jsonObject.optString("targetURL");
-	mLoadedByteLength = jsonObject.optLong("loadedByteLength");
-	mTotalByteLength = jsonObject.optLong("totalByteLength");
-	mDownloadRateLimit = jsonObject.optInt("downloadRateLimit");
-	mMemoryCacheSize = jsonObject.optInt("memoryCacheSize");
-	mTag = jsonObject.optInt("tag");
-	mFilePath = jsonObject.optString("filePath");
-	mFileName = jsonObject.optString("fileName");
+    private DownloadTask(Context context, File configFile) throws Exception {
+	this(context);
+	ObjectInputStream in = null;
+	try {
+	    in = new ObjectInputStream(new FileInputStream(configFile));
+	    DownloadConfig cfg = (DownloadConfig) in.readObject();
+	    mUUID = cfg.uuid;
+	    mTargetURL = cfg.targetURL;
+	    mLoadedByteLength = cfg.loadedByteLength;
+	    mTotalByteLength = cfg.totalByteLength;
+	    mDownloadRateLimit = cfg.downloadRateLimit;
+	    mMemoryCacheSize = cfg.memoryCacheSize;
+	    mTag = cfg.tag;
+	    mFilePath = cfg.filePath;
+	    mFileName = cfg.fileName;
+
+	    File downloadFile = new File(mFilePath);
+	    if (downloadFile.length() != mLoadedByteLength) {
+		mLoadedByteLength = 0;
+		mTotalByteLength = 0;
+	    }
+	} catch (Exception e) {
+	    e.printStackTrace();
+	    throw e;
+	} finally {
+	    if (in != null) {
+		try {
+		    in.close();
+		} catch (IOException e) {
+		    e.printStackTrace();
+		}
+	    }
+	}
     }
 
     /**
@@ -584,5 +636,22 @@ public class DownloadTask implements Runnable {
 	    e.printStackTrace();
 	}
 	mIsDownloading = false;
+    }
+
+    public String getConfigFilePath() {
+	return getFilePath() + ".dlcfg";
+    }
+
+    private static class DownloadConfig implements Serializable {
+	private static final long serialVersionUID = -4946894359380266539L;
+	public String uuid;
+	public String targetURL;
+	public long loadedByteLength;
+	public long totalByteLength;
+	public int downloadRateLimit;
+	public int memoryCacheSize;
+	public int tag;
+	public String filePath;
+	public String fileName;
     }
 }

@@ -3,32 +3,27 @@
     android:id="@+id/container"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    tools:context="com.dll.downloadutil.MainActivity"
-    android:orientation="vertical" >
-    <Button 
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/button_start" 
-        android:onClick="onClickStart" />
-    
-    <Button 
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/button_stop"
-        android:onClick="onClickStop" />
-    
-    
-    <Button 
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/button_resume"
-        android:onClick="onClickResume" />
-    
+    android:orientation="vertical"
+    tools:context="com.dll.downloadutil.MainActivity" >
+
     <Button
-        android:id="@+id/button_cancel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/button_cancel"
-        android:onClick="onClickCancel" />
-    
+        android:onClick="onClickStart"
+        android:text="@string/button_start" />
+
+    <Button
+        android:id="@+id/button_stop"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:onClick="onClickStop"
+        android:text="@string/button_stop" />
+
+    <Button
+        android:id="@+id/button_resume"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:onClick="onClickResume"
+        android:text="@string/button_resume" />
+
 </LinearLayout>

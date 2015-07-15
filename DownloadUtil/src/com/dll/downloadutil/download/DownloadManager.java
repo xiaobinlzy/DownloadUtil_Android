@@ -1,6 +1,13 @@
 package com.dll.downloadutil.download;
 
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 
 import android.content.Context;
 import android.os.Handler;
@@ -23,6 +30,8 @@ public abstract class DownloadManager implements Callback {
     protected Context mContext;
     protected Handler mHandler = new Handler(Looper.getMainLooper(), this);
 
+    private static final String STATE_FILE_NAME = "downloadstate";
+
     protected static final int HANDLE_ON_START_DOWNLOAD = 1;
     protected static final int HANDLE_ON_FAILED_DOWNLOAD = 2;
     protected static final int HANDLE_ON_FINISH_DOWNLOAD = 3;
@@ -39,7 +48,36 @@ public abstract class DownloadManager implements Callback {
 
     protected DownloadManager(Context context) {
 	mContext = context.getApplicationContext();
+	ObjectInputStream in = null;
+	try {
+	    in = new ObjectInputStream(mContext.openFileInput(STATE_FILE_NAME));
+	    @SuppressWarnings("unchecked")
+	    List<DownloadInfo> infos = (List<DownloadInfo>) in.readObject();
+	    List<DownloadTask> tasks = new ArrayList<DownloadTask>();
+	    for (DownloadInfo info : infos) {
+		DownloadTask task = DownloadTask.createTaskFromConfigFile(mContext,
+			info.configFile);
+		if (task != null) {
+		    tasks.add(task);
+		}
+	    }
+	    restoreState(tasks);
+	} catch (FileNotFoundException e) {
+	} catch (IOException e) {
+	} catch (ClassNotFoundException e) {
+	    e.printStackTrace();
+	} finally {
+	    if (in != null) {
+		try {
+		    in.close();
+		} catch (IOException e) {
+		    e.printStackTrace();
+		}
+	    }
+	}
     }
+
+    protected abstract void restoreState(List<DownloadTask> tasks);
 
     /**
      * 获取当前的下载任务集合
@@ -53,23 +91,22 @@ public abstract class DownloadManager implements Callback {
      * 
      * @param downloadTask
      */
-    public synchronized void addDownloadTask(DownloadTask downloadTask) {
+    public synchronized void addDownloadTask(DownloadTask downloadTask, boolean start) {
+	downloadTask.writeConfigFile();
 	handleAddDownloadTask(downloadTask);
-	startNextDownload();
+	if (start) {
+	    startNextDownload();
+	}
+	saveState();
     }
+
+    public synchronized void resumeAll() {
+	handleResumeAll();
+    }
+
+    protected abstract void handleResumeAll();
 
     protected abstract void handleAddDownloadTask(DownloadTask downloadTask);
-
-    protected synchronized void writeFile() {
-	handleWriteFile();
-    }
-
-    protected abstract void handleWriteFile();
-
-    protected void finalize() throws Throwable {
-	writeFile();
-	super.finalize();
-    };
 
     protected synchronized boolean startNextDownload() {
 	return handleStartNextDownload();
@@ -78,56 +115,55 @@ public abstract class DownloadManager implements Callback {
     protected abstract boolean handleStartNextDownload();
 
     /**
-     * 继续开始执行下载任务
-     * 
-     * @return
-     */
-    public synchronized boolean resume() {
-	return handleResume();
-    }
-
-    protected abstract boolean handleResume();
-
-    /**
      * 移除掉所有的下载任务
      */
     public synchronized void removeAll() {
 	handleRemoveAll();
+	saveState();
     }
 
-    protected abstract void handleStop();
+    public synchronized void remove(DownloadTask downloadTask, boolean start) {
+	handleRemove(downloadTask);
+	saveState();
+	if (start) {
+	    startNextDownload();
+	}
+    }
+
+    protected abstract void handleRemove(DownloadTask downloadTask);
+
+    protected abstract void handleStopAll();
 
     /**
      * 停止当前的下载任务
      */
-    public synchronized void stop() {
-	handleStop();
+    public synchronized void stopAll() {
+	handleStopAll();
     }
 
-    protected void onStartDownload(DownloadTask downloadTask) {
+    protected synchronized void onStartDownload(DownloadTask downloadTask) {
 	mHandler.obtainMessage(HANDLE_ON_START_DOWNLOAD, downloadTask).sendToTarget();
     }
 
-    protected void onFailedDownload(DownloadTask downloadTask) {
+    protected synchronized void onFailedDownload(DownloadTask downloadTask) {
 	mHandler.obtainMessage(HANDLE_ON_FAILED_DOWNLOAD, downloadTask).sendToTarget();
-	writeFile();
     }
 
-    protected void onReceiveDownloadData(DownloadTask downloadTask) {
-	writeFile();
-	mHandler.obtainMessage(HANDLE_ON_RECEIVE_DOWNLOAD_DATA, downloadTask).sendToTarget();
+    protected synchronized void onReceiveDownloadData(DownloadTask downloadTask) {
+	mHandler.obtainMessage(HANDLE_ON_RECEIVE_DOWNLOAD_DATA, downloadTask)
+		.sendToTarget();
     }
 
     protected abstract void handleRemoveAll();
 
-    protected void onFinishDownload(DownloadTask downloadTask) {
-	writeFile();
-	removeDownloadTask(downloadTask);
+    protected synchronized void onFinishDownload(DownloadTask downloadTask) {
+	handleFinish(downloadTask);
 	startNextDownload();
 	mHandler.obtainMessage(HANDLE_ON_FINISH_DOWNLOAD, downloadTask).sendToTarget();
+	saveState();
     }
 
-    protected abstract void removeDownloadTask(DownloadTask donwloadTask);
+    protected abstract void handleFinish(DownloadTask donwloadTask);
 
     @Override
     public boolean handleMessage(Message msg) {
@@ -150,9 +186,55 @@ public abstract class DownloadManager implements Callback {
 		break;
 	    }
 	}
-	if (msg.what == HANDLE_ON_FINISH_DOWNLOAD) {
-	    startNextDownload();
-	}
 	return true;
+    }
+
+    public synchronized void saveState() {
+	List<DownloadTask> tasks = getDownloadTaskList();
+
+	List<DownloadInfo> cfgs = new ArrayList<DownloadInfo>();
+	for (DownloadTask task : tasks) {
+	    DownloadInfo info = new DownloadInfo(task);
+	    cfgs.add(info);
+	}
+	ObjectOutputStream out = null;
+	try {
+	    out = new ObjectOutputStream(mContext.openFileOutput(STATE_FILE_NAME,
+		    Context.MODE_PRIVATE));
+	    out.writeObject(cfgs);
+	} catch (FileNotFoundException e) {
+	    e.printStackTrace();
+	} catch (IOException e) {
+	    e.printStackTrace();
+	} finally {
+	    if (out != null) {
+		try {
+		    out.close();
+		} catch (IOException e) {
+		    e.printStackTrace();
+		}
+	    }
+	}
+    }
+
+    /**
+     * 返回当前在下载队列中的配置文件路径列表
+     * 
+     * @return
+     */
+    protected abstract List<DownloadTask> getDownloadTaskList();
+
+    public static class DownloadInfo implements Serializable {
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = -520939353272967829L;
+	public String configFile;
+	public String targetURL;
+
+	public DownloadInfo(DownloadTask task) {
+	    configFile = task.getConfigFilePath();
+	    targetURL = task.getTargetURL();
+	}
     }
 }
